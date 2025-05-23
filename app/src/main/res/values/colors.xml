@@ -9,4 +9,5 @@
     <color name="gray">#757575</color>
     <color name="light_blue">#E3F2FD</color>
     <color name="error_red">#B00020</color>
+    <color name="table_alternate_row">#F0F0F0</color>
 </resources>

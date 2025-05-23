@@ -1,9 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+    xmlns:tools="http://schemas.android.com/tools"
+    package="com.example.governmentapp">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-feature android:name="android.hardware.camera" android:required="true" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="true" />
 
     <application
         android:name=".GovernmentApp"
@@ -17,14 +26,86 @@
         android:theme="@style/Theme.GovernmentApp"
         tools:targetApi="31">
         
+        <!-- File Provider for Camera -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+        
+        <!-- Splash Screen Activity -->
         <activity
-            android:name=".LoginActivity"
-            android:exported="true">
+            android:name=".SplashActivity"
+            android:exported="true"
+            android:theme="@style/SplashTheme">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        
+        <activity
+            android:name=".LoginActivity"
+            android:exported="true">
+            <!-- Removed intent filter from here -->
+        </activity>
+        
+        <activity
+            android:name=".AttendanceActivity"
+            android:exported="false" />
+            
+        <activity
+            android:name=".LocationSelectionActivity"
+            android:exported="false" />
+            
+        <activity
+            android:name=".FaceDetectionActivity"
+            android:exported="false" />
+            
+        <activity
+            android:name=".AttendanceHistoryActivity"
+            android:exported="false" />
+            
+        <activity
+            android:name=".AdminDashboardActivity"
+            android:exported="false" />
+            
+        <activity
+            android:name=".AddUserActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+            
+        <activity
+            android:name=".AddLocationActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+            
+        <activity
+            android:name=".EditLocationActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+            
+        <activity
+            android:name=".EditUserActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+            
+        <!-- Report Activities -->
+        <activity
+            android:name=".UserReportsActivity"
+            android:exported="false" />
+            
+        <activity
+            android:name=".DailyReportsActivity"
+            android:exported="false" />
+            
+        <activity
+            android:name=".LocationReportsActivity"
+            android:exported="false" />
     </application>
 
 </manifest>
