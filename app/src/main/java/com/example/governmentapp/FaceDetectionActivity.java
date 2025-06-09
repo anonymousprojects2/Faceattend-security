@@ -5,6 +5,9 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
+import android.graphics.Rect;
+import android.graphics.drawable.BitmapDrawable;
 import android.media.ExifInterface;
 import android.os.Bundle;
 import android.util.Log;
@@ -52,6 +55,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class FaceDetectionActivity extends AppCompatActivity {
@@ -59,17 +63,24 @@ public class FaceDetectionActivity extends AppCompatActivity {
     private static final int REQUEST_CODE_PERMISSIONS = 10;
     private static final String[] REQUIRED_PERMISSIONS = new String[]{Manifest.permission.CAMERA};
     
-    // Define multiple threshold levels for different verification scenarios
-    private static final float FACE_MATCH_THRESHOLD_STRICT = 0.92f;  // Very strict threshold
-    private static final float FACE_MATCH_THRESHOLD_NORMAL = 0.82f;  // Balanced threshold (adjusted from 0.85)
-    private static final float FACE_MATCH_THRESHOLD_RELAXED = 0.78f; // For poor lighting conditions
-
-    // Use normal threshold for better security while maintaining reasonable usability
+    // Face detection thresholds
+    private static final float FACE_MATCH_THRESHOLD_STRICT = 0.92f;
+    private static final float FACE_MATCH_THRESHOLD_NORMAL = 0.82f;
+    private static final float FACE_MATCH_THRESHOLD_RELAXED = 0.78f;
     private static final float FACE_MATCH_THRESHOLD = FACE_MATCH_THRESHOLD_NORMAL;
 
-    // Adjust face detection parameters for better accuracy
-    private static final float MAX_HEAD_ANGLE = 35.0f; // More permissive angle (increased from 28.0f)
-    private static final float MIN_EYE_OPEN_PROBABILITY = 0.35f; // Slightly more permissive (adjusted from 0.4)
+    // Face detection parameters
+    private static final float MAX_HEAD_ANGLE = 35.0f;
+    private static final float MIN_EYE_OPEN_PROBABILITY = 0.35f;
+    
+    // Face size validation
+    private static final int MIN_FACE_SIZE_PIXELS = 120;  // Minimum face size in pixels
+    private static final float MIN_FACE_PROPORTION = 0.15f; // Minimum face size relative to image
+    private static final float MAX_FACE_PROPORTION = 0.85f; // Maximum face size relative to image
+
+    // Lighting condition thresholds
+    private static final float GOOD_LIGHTING_THRESHOLD = 180.0f;  // Average pixel value for good lighting
+    private static final float POOR_LIGHTING_THRESHOLD = 100.0f;  // Average pixel value for poor lighting
 
     private PreviewView previewView;
     private Button captureButton;
@@ -83,74 +94,22 @@ public class FaceDetectionActivity extends AppCompatActivity {
     private FirebaseAuth mAuth;
     private String attendanceType;
 
-    private final Executor executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private float lastSimilarityScore = 0.0f;
-    private File lastCapturedPhotoFile = null; // Store the last captured photo file for retrying
-    private String lastUserId = null; // Store the last user ID for retrying
+    private File lastCapturedPhotoFile = null;
+    private String lastUserId = null;
+    private volatile boolean isProcessingImage = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_face_detection);
-
-        // Initialize Firebase components
-        try {
-            storage = FirebaseStorage.getInstance();
-            db = FirebaseFirestore.getInstance();
-            mAuth = FirebaseAuth.getInstance();
-            
-            if (storage == null || db == null || mAuth == null) {
-                Log.e(TAG, "Firebase components not initialized properly");
-                Toast.makeText(this, "Error initializing Firebase. Please restart the app.", Toast.LENGTH_LONG).show();
-                finish();
-                return;
-            }
-            
-            Log.d(TAG, "Firebase components initialized successfully");
-        } catch (Exception e) {
-            Log.e(TAG, "Error initializing Firebase components: " + e.getMessage(), e);
-            Toast.makeText(this, "Error initializing Firebase: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            finish();
-            return;
-        }
-
-        // Get attendance type (check in/out) from intent
-        attendanceType = getIntent().getStringExtra("attendance_type");
-        if (attendanceType == null) {
-            attendanceType = "check in"; // Default
-        }
-
-        previewView = findViewById(R.id.viewFinder);
-        captureButton = findViewById(R.id.captureButton);
-        progressIndicator = findViewById(R.id.progressIndicator);
-
-        // Get Face Detector from application with more accurate options
-        try {
-            // Create more accurate face detector options
-            FaceDetectorOptions options = new FaceDetectorOptions.Builder()
-                    .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
-                    .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
-                    .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
-                    //.setMinFaceSize(0.15f) // Requires larger faces in the frame
-                    .build();
-                    
-            faceDetector = FaceDetection.getClient(options);
-            
-            if (faceDetector == null) {
-                Log.e(TAG, "Failed to create face detector");
-                Toast.makeText(this, "Error initializing face detection. Please restart the app.", Toast.LENGTH_LONG).show();
-                finish();
-                return;
-            }
-            
-            Log.d(TAG, "Face detector initialized successfully with accurate settings");
-        } catch (Exception e) {
-            Log.e(TAG, "Error getting face detector: " + e.getMessage(), e);
-            Toast.makeText(this, "Error initializing face detection. Please restart the app.", Toast.LENGTH_LONG).show();
-            finish();
-            return;
-        }
-
+        
+        // Initialize views and Firebase instances
+        initializeViews();
+        initializeFirebase();
+        initializeFaceDetector();
+        
         // Request camera permissions if not already granted
         if (allPermissionsGranted()) {
             startCamera();
@@ -158,8 +117,73 @@ public class FaceDetectionActivity extends AppCompatActivity {
             ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS);
         }
 
-        // Set up capture button click listener
-        captureButton.setOnClickListener(v -> captureImage());
+        // Set up capture button click listener with debounce
+        captureButton.setOnClickListener(v -> {
+            if (!isProcessingImage) {
+                captureImage();
+            }
+        });
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        // Shutdown executor service
+        executor.shutdownNow();
+        
+        // Release camera resources
+        if (cameraProvider != null) {
+            cameraProvider.unbindAll();
+        }
+        
+        // Clean up temporary files
+        if (lastCapturedPhotoFile != null && lastCapturedPhotoFile.exists()) {
+            lastCapturedPhotoFile.delete();
+        }
+    }
+
+    private void initializeViews() {
+        previewView = findViewById(R.id.viewFinder);
+        captureButton = findViewById(R.id.captureButton);
+        progressIndicator = findViewById(R.id.progressIndicator);
+        
+        // Get attendance type from intent
+        attendanceType = getIntent().getStringExtra("type");
+        if (attendanceType == null) {
+            attendanceType = "CHECK_IN"; // Default value
+        }
+    }
+
+    private void initializeFirebase() {
+        storage = FirebaseStorage.getInstance();
+        db = FirebaseFirestore.getInstance();
+        mAuth = FirebaseAuth.getInstance();
+    }
+
+    private void initializeFaceDetector() {
+        try {
+            FaceDetectorOptions options = new FaceDetectorOptions.Builder()
+                    .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+                    .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
+                    .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+                    .setMinFaceSize(MIN_FACE_PROPORTION)
+                    .build();
+            
+            faceDetector = FaceDetection.getClient(options);
+            Log.d(TAG, "Face detector initialized with min face size: " + MIN_FACE_PROPORTION);
+        } catch (Exception e) {
+            Log.e(TAG, "Error initializing face detector: " + e.getMessage(), e);
+            Toast.makeText(this, "Error initializing face detection", Toast.LENGTH_LONG).show();
+            finish();
+        }
+    }
+
+    private synchronized void setProcessingState(boolean isProcessing) {
+        isProcessingImage = isProcessing;
+        runOnUiThread(() -> {
+            captureButton.setEnabled(!isProcessing);
+            progressIndicator.setVisibility(isProcessing ? View.VISIBLE : View.GONE);
+        });
     }
 
     private void startCamera() {
@@ -205,34 +229,32 @@ public class FaceDetectionActivity extends AppCompatActivity {
     private void captureImage() {
         if (imageCapture == null) return;
 
-        // Show progress
-        progressIndicator.setVisibility(View.VISIBLE);
-        captureButton.setEnabled(false);
+        setProcessingState(true);
 
         // Create temporary file for the image
-        File photoFile = new File(getFilesDir(), "face_verification.jpg");
-        lastCapturedPhotoFile = photoFile; // Store for retry
+        File photoFile = new File(getFilesDir(), "face_verification_" + System.currentTimeMillis() + ".jpg");
+        // Clean up previous temp file if it exists
+        if (lastCapturedPhotoFile != null && lastCapturedPhotoFile.exists()) {
+            lastCapturedPhotoFile.delete();
+        }
+        lastCapturedPhotoFile = photoFile;
 
-        // Create output options object
         ImageCapture.OutputFileOptions outputOptions = new ImageCapture.OutputFileOptions.Builder(photoFile).build();
 
-        // Capture the image
         imageCapture.takePicture(
                 outputOptions,
                 executor,
                 new ImageCapture.OnImageSavedCallback() {
                     @Override
                     public void onImageSaved(@NonNull ImageCapture.OutputFileResults outputFileResults) {
-                        // Process the captured image for face verification
                         verifyFace(photoFile);
                     }
 
                     @Override
                     public void onError(@NonNull ImageCaptureException exception) {
                         Log.e(TAG, "Image capture failed: ", exception);
+                        setProcessingState(false);
                         runOnUiThread(() -> {
-                            progressIndicator.setVisibility(View.GONE);
-                            captureButton.setEnabled(true);
                             Toast.makeText(FaceDetectionActivity.this, "Failed to capture image", Toast.LENGTH_SHORT).show();
                         });
                     }
@@ -262,68 +284,73 @@ public class FaceDetectionActivity extends AppCompatActivity {
             .get()
             .addOnSuccessListener(querySnapshot -> {
                 if (!querySnapshot.isEmpty()) {
-                    DocumentSnapshot document = querySnapshot.getDocuments().get(0);
-                    String sevarthId = document.getString("sevarthId");
-                    
-                    if (sevarthId == null || sevarthId.isEmpty()) {
-                        Log.e(TAG, "SevarthId not found for user: " + email);
-                        showResult(false, "User ID error. Please contact administrator.");
-                        return;
-                    }
-                    
-                    // Store sevarthId for retry
-                    lastUserId = sevarthId; 
-                    
-                    Log.d(TAG, "Verifying face for sevarthId: " + sevarthId);
-                    
-                    // Use sevarthId as storage identifier (no need for replacement)
-                    String storageId = sevarthId;
-                    
-                    // Reference to the stored face image in Firebase Storage
-                    StorageReference faceRef = storage.getReference().child("faces/" + storageId + ".jpg");
-                    
-                    Log.d(TAG, "Looking for reference image at: faces/" + storageId + ".jpg");
-
-                    // Download the stored face image to compare
                     try {
-                        // Show progress while downloading
-                        progressIndicator.setProgress(25, true);
+                        DocumentSnapshot document = querySnapshot.getDocuments().get(0);
+                        String sevarthId = document.getString("sevarthId");
                         
-                        faceRef.getBytes(Long.MAX_VALUE)
-                            .addOnSuccessListener(bytes -> {
-                                Log.d(TAG, "Successfully downloaded reference image of size: " + bytes.length + " bytes");
-                                try {
-                                    progressIndicator.setProgress(50, true);
-                                    
-                                    // Create bitmap of the reference face from Firebase Storage
-                                    Bitmap referenceImageBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-                                    // Create bitmap of the captured face
-                                    Bitmap capturedImageBitmap = BitmapFactory.decodeFile(photoFile.getPath());
-                                    
-                                    if (referenceImageBitmap == null || capturedImageBitmap == null) {
-                                        Log.e(TAG, "Failed to decode bitmaps");
-                                        showResult(false, "Failed to process face images");
-                                        return;
+                        if (sevarthId == null || sevarthId.isEmpty()) {
+                            Log.e(TAG, "SevarthId not found for user: " + email);
+                            showResult(false, "User ID error. Please contact administrator.");
+                            return;
+                        }
+                        
+                        // Store sevarthId for retry
+                        lastUserId = sevarthId; 
+                        
+                        Log.d(TAG, "Verifying face for sevarthId: " + sevarthId);
+                        
+                        // Use sevarthId as storage identifier
+                        String storageId = sevarthId;
+                        
+                        // Reference to the stored face image in Firebase Storage
+                        StorageReference faceRef = storage.getReference().child("faces/" + storageId + ".jpg");
+                        
+                        Log.d(TAG, "Looking for reference image at: faces/" + storageId + ".jpg");
+
+                        // Download the stored face image to compare with timeout handling
+                        try {
+                            // Show progress while downloading
+                            progressIndicator.setProgress(25, true);
+                            
+                            faceRef.getBytes(Long.MAX_VALUE)
+                                .addOnSuccessListener(bytes -> {
+                                    Log.d(TAG, "Successfully downloaded reference image of size: " + bytes.length + " bytes");
+                                    try {
+                                        progressIndicator.setProgress(50, true);
+                                        
+                                        // Create bitmap of the reference face from Firebase Storage
+                                        Bitmap referenceImageBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                                        // Create bitmap of the captured face
+                                        Bitmap capturedImageBitmap = BitmapFactory.decodeFile(photoFile.getPath());
+                                        
+                                        if (referenceImageBitmap == null || capturedImageBitmap == null) {
+                                            Log.e(TAG, "Failed to decode bitmaps");
+                                            showResult(false, "Failed to process face images");
+                                            return;
+                                        }
+                                        
+                                        Log.d(TAG, "Reference image dimensions: " + referenceImageBitmap.getWidth() + "x" + referenceImageBitmap.getHeight());
+                                        Log.d(TAG, "Captured image dimensions: " + capturedImageBitmap.getWidth() + "x" + capturedImageBitmap.getHeight());
+                                        
+                                        // Compare the two face images
+                                        compareFaces(referenceImageBitmap, capturedImageBitmap, sevarthId);
+                                        
+                                    } catch (Exception e) {
+                                        Log.e(TAG, "Error processing images for comparison: " + e.getMessage(), e);
+                                        showResult(false, "Error processing face images: " + e.getMessage());
                                     }
-                                    
-                                    Log.d(TAG, "Reference image dimensions: " + referenceImageBitmap.getWidth() + "x" + referenceImageBitmap.getHeight());
-                                    Log.d(TAG, "Captured image dimensions: " + capturedImageBitmap.getWidth() + "x" + capturedImageBitmap.getHeight());
-                                    
-                                    // Compare the two face images
-                                    compareFaces(referenceImageBitmap, capturedImageBitmap, sevarthId);
-                                    
-                                } catch (Exception e) {
-                                    Log.e(TAG, "Error processing images for comparison: " + e.getMessage(), e);
-                                    showResult(false, "Error processing face images: " + e.getMessage());
-                                }
-                            })
-                            .addOnFailureListener(e -> {
-                                Log.e(TAG, "Error downloading stored face image: " + e.getMessage(), e);
-                                showResult(false, "Failed to retrieve stored face image. Would you like to save your current image as reference?", true);
-                            });
+                                })
+                                .addOnFailureListener(e -> {
+                                    Log.e(TAG, "Error downloading stored face image: " + e.getMessage(), e);
+                                    showResult(false, "Failed to retrieve stored face image. Would you like to save your current image as reference?", true);
+                                });
+                        } catch (Exception e) {
+                            Log.e(TAG, "Exception in verifyFace: " + e.getMessage(), e);
+                            showResult(false, "Error during face verification: " + e.getMessage());
+                        }
                     } catch (Exception e) {
-                        Log.e(TAG, "Exception in verifyFace: " + e.getMessage(), e);
-                        showResult(false, "Error during face verification: " + e.getMessage());
+                        Log.e(TAG, "Error processing user document: " + e.getMessage(), e);
+                        showResult(false, "Error processing user data. Please try again.");
                     }
                 } else {
                     Log.e(TAG, "User document not found for email: " + email);
@@ -338,11 +365,13 @@ public class FaceDetectionActivity extends AppCompatActivity {
     
     private void compareFaces(Bitmap referenceFace, Bitmap capturedFace, String userId) {
         try {
-            // Use ML Kit to detect faces in both images
+            // Calculate adaptive threshold based on lighting conditions
+            float adaptiveThreshold = getAdaptiveThreshold(capturedFace);
+            Log.d(TAG, "Using adaptive threshold: " + adaptiveThreshold + " for face comparison");
+
             InputImage referenceImage = InputImage.fromBitmap(referenceFace, 0);
             InputImage capturedImage = InputImage.fromBitmap(capturedFace, 0);
             
-            // First, detect face in the reference image
             faceDetector.process(referenceImage)
                 .addOnSuccessListener(referencefaces -> {
                     if (referencefaces.isEmpty()) {
@@ -350,12 +379,18 @@ public class FaceDetectionActivity extends AppCompatActivity {
                         return;
                     }
                     
-                    // More than one face in reference image is problematic
                     if (referencefaces.size() > 1) {
-                        Log.w(TAG, "Multiple faces (" + referencefaces.size() + ") found in reference image, using only the first face");
+                        Log.w(TAG, "Multiple faces found in reference image");
                     }
                     
-                    // Then detect face in the captured image
+                    Face refFace = referencefaces.get(0);
+                    
+                    // Validate reference face size
+                    if (!isFaceSizeValid(refFace, referenceFace)) {
+                        showResult(false, "Reference face image quality is not sufficient");
+                        return;
+                    }
+                    
                     faceDetector.process(capturedImage)
                         .addOnSuccessListener(capturedFaces -> {
                             if (capturedFaces.isEmpty()) {
@@ -363,42 +398,27 @@ public class FaceDetectionActivity extends AppCompatActivity {
                                 return;
                             }
                             
-                            // Check if there are multiple faces in the captured image
                             if (capturedFaces.size() > 1) {
-                                Log.w(TAG, "Multiple faces (" + capturedFaces.size() + ") detected in captured image");
                                 showResult(false, "Multiple faces detected. Please ensure only your face is visible");
                                 return;
                             }
                             
-                            // Check if the captured face is large enough to verify
                             Face capturedFace1 = capturedFaces.get(0);
-                            /*
-                            if (capturedFace1.getBoundingBox().width() < MIN_FACE_SIZE || capturedFace1.getBoundingBox().height() < MIN_FACE_SIZE) {
-                                showResult(false, "Face is too small or too far away. Please move closer.");
-                                Log.d(TAG, "Captured face too small: " + capturedFace1.getBoundingBox().width() + "x" + capturedFace1.getBoundingBox().height());
-                                return;
-                            }
-                            */
                             
-                            // Check if head angle is acceptable (not too extreme)
-                            float headAngleX = Math.abs(capturedFace1.getHeadEulerAngleX()); // Up/down
-                            float headAngleY = Math.abs(capturedFace1.getHeadEulerAngleY()); // Left/right
-                            float headAngleZ = Math.abs(capturedFace1.getHeadEulerAngleZ()); // Tilt
-                            
-                            if (headAngleX > MAX_HEAD_ANGLE || headAngleY > MAX_HEAD_ANGLE) {
-                                showResult(false, "Please look directly at the camera with your head straight");
-                                Log.d(TAG, "Head angle too extreme - X: " + headAngleX + ", Y: " + headAngleY + ", Z: " + headAngleZ);
+                            // Validate captured face size
+                            if (!isFaceSizeValid(capturedFace1, capturedFace)) {
+                                showResult(false, "Please adjust your distance from the camera");
                                 return;
                             }
                             
-                            // Compare the reference face with the captured face using our algorithm
-                            boolean faceVerified = simulateFaceComparison(referencefaces.get(0), capturedFaces.get(0));
-                            
-                            if (faceVerified) {
-                                // If face verification is successful, record attendance
-                                recordAttendance(userId);
-                            } else {
-                                showResult(false, "Face verification failed. Please ensure it's you and try again");
+                            // Continue with existing face comparison logic
+                            if (checkHeadPose(capturedFace1)) {
+                                boolean faceVerified = simulateFaceComparison(refFace, capturedFace1);
+                                if (faceVerified) {
+                                    recordAttendance(userId);
+                                } else {
+                                    showResult(false, "Face verification failed. Please try again");
+                                }
                             }
                         })
                         .addOnFailureListener(e -> {
@@ -417,9 +437,74 @@ public class FaceDetectionActivity extends AppCompatActivity {
         }
     }
     
+    private boolean isFaceSizeValid(Face face, Bitmap image) {
+        if (face == null || image == null) return false;
+
+        // Get face and image dimensions
+        Rect faceBounds = face.getBoundingBox();
+        int faceWidth = faceBounds.width();
+        int faceHeight = faceBounds.height();
+        int imageWidth = image.getWidth();
+        int imageHeight = image.getHeight();
+
+        // Check absolute size
+        if (faceWidth < MIN_FACE_SIZE_PIXELS || faceHeight < MIN_FACE_SIZE_PIXELS) {
+            Log.d(TAG, "Face too small: " + faceWidth + "x" + faceHeight + 
+                  " (minimum: " + MIN_FACE_SIZE_PIXELS + "x" + MIN_FACE_SIZE_PIXELS + ")");
+            return false;
+        }
+
+        // Check relative size
+        float widthProportion = (float) faceWidth / imageWidth;
+        float heightProportion = (float) faceHeight / imageHeight;
+
+        if (widthProportion < MIN_FACE_PROPORTION || heightProportion < MIN_FACE_PROPORTION) {
+            Log.d(TAG, "Face too small relative to image: " + 
+                  String.format("%.2f", widthProportion * 100) + "% x " + 
+                  String.format("%.2f", heightProportion * 100) + "%");
+            return false;
+        }
+
+        if (widthProportion > MAX_FACE_PROPORTION || heightProportion > MAX_FACE_PROPORTION) {
+            Log.d(TAG, "Face too large relative to image: " + 
+                  String.format("%.2f", widthProportion * 100) + "% x " + 
+                  String.format("%.2f", heightProportion * 100) + "%");
+            return false;
+        }
+
+        Log.d(TAG, "Face size valid: " + faceWidth + "x" + faceHeight + 
+              " (" + String.format("%.2f", widthProportion * 100) + "% x " + 
+              String.format("%.2f", heightProportion * 100) + "%)");
+        return true;
+    }
+
+    private boolean checkHeadPose(Face face) {
+        float headAngleX = Math.abs(face.getHeadEulerAngleX());
+        float headAngleY = Math.abs(face.getHeadEulerAngleY());
+        float headAngleZ = Math.abs(face.getHeadEulerAngleZ());
+        
+        if (headAngleX > MAX_HEAD_ANGLE || headAngleY > MAX_HEAD_ANGLE) {
+            showResult(false, "Please look directly at the camera with your head straight");
+            Log.d(TAG, "Head angle too extreme - X: " + headAngleX + ", Y: " + headAngleY + ", Z: " + headAngleZ);
+            return false;
+        }
+        return true;
+    }
+
     // Update the basic implementation of face comparison for better recognition
     private boolean simulateFaceComparison(Face referenceFace, Face capturedFace) {
         Log.d(TAG, "Comparing face characteristics with improved algorithm...");
+        
+        // Get the adaptive threshold based on current lighting conditions
+        float currentThreshold = FACE_MATCH_THRESHOLD_NORMAL; // Default threshold
+        android.graphics.drawable.Drawable background = previewView.getBackground();
+        if (background instanceof BitmapDrawable) {
+            Bitmap backgroundBitmap = ((BitmapDrawable) background).getBitmap();
+            if (backgroundBitmap != null) {
+                currentThreshold = getAdaptiveThreshold(backgroundBitmap);
+            }
+        }
+        Log.d(TAG, "Using adaptive threshold: " + currentThreshold + " for face comparison");
         
         // Advanced face comparison with weighted features and multiple checks
         float similarityScore = 0.0f;
@@ -565,7 +650,7 @@ public class FaceDetectionActivity extends AppCompatActivity {
         // Calculate final similarity score with weighted features
         float finalScore = (totalWeight > 0) ? similarityScore / totalWeight : 0;
         Log.d(TAG, "Final weighted similarity score: " + finalScore + 
-              " (threshold: " + FACE_MATCH_THRESHOLD + ")");
+              " (threshold: " + currentThreshold + ")");
         
         // Generate detailed summary for debugging
         Log.d(TAG, "VERIFICATION SUMMARY:");
@@ -578,11 +663,11 @@ public class FaceDetectionActivity extends AppCompatActivity {
         Log.d(TAG, "Head angle Y similarity: " + angleSimY + " (weight: " + headAngleWeight + ")");
         Log.d(TAG, "Head angle Z similarity: " + angleSimZ + " (weight: " + headAngleWeight + ")");
         Log.d(TAG, "Final similarity score: " + finalScore);
-        Log.d(TAG, "Required threshold: " + FACE_MATCH_THRESHOLD);
+        Log.d(TAG, "Required threshold: " + currentThreshold);
         Log.d(TAG, "------------------------------------");
         
         // Apply threshold check with detailed failure reason
-        if (finalScore < FACE_MATCH_THRESHOLD) {
+        if (finalScore < currentThreshold) {
             // Identify which feature is causing the biggest problem
             float[] scores = {ratioSimilarity, leftEyeSimilarity, rightEyeSimilarity, 
                              smileSimilarity, angleSimX, angleSimY, angleSimZ};
@@ -605,7 +690,7 @@ public class FaceDetectionActivity extends AppCompatActivity {
         }
         
         // Additional check for score near threshold - balanced approach
-        if (finalScore < FACE_MATCH_THRESHOLD + 0.05f) { // Slightly tightened buffer (was 0.06)
+        if (finalScore < currentThreshold + 0.05f) {
             // Focus on the most stable features with balanced threshold
             float criticalFeatureAvg = (angleSimX + angleSimY + angleSimZ + ratioSimilarity) / 4.0f;
             if (criticalFeatureAvg < 0.76f) { // Slightly more permissive (was 0.78)
@@ -618,7 +703,8 @@ public class FaceDetectionActivity extends AppCompatActivity {
         // Store the last calculated score for logging purposes
         lastSimilarityScore = finalScore;
         
-        Log.d(TAG, "Face verification PASSED with final score: " + finalScore);
+        Log.d(TAG, "Face verification PASSED with final score: " + finalScore + 
+              " (threshold: " + currentThreshold + ")");
         return true;
     }
 
@@ -908,6 +994,52 @@ public class FaceDetectionActivity extends AppCompatActivity {
                     })
                     .addOnFailureListener(e -> Log.e(TAG, "Face detection failed: ", e))
                     .addOnCompleteListener(task -> imageProxy.close());
+        }
+    }
+
+    private float calculateLightingCondition(Bitmap image) {
+        if (image == null) return 0;
+
+        // Convert bitmap to grayscale and calculate average brightness
+        int width = image.getWidth();
+        int height = image.getHeight();
+        int pixelCount = width * height;
+        float totalBrightness = 0;
+
+        for (int x = 0; x < width; x++) {
+            for (int y = 0; y < height; y++) {
+                int pixel = image.getPixel(x, y);
+                // Convert RGB to grayscale using standard coefficients
+                float brightness = (Color.red(pixel) * 0.299f + 
+                                  Color.green(pixel) * 0.587f + 
+                                  Color.blue(pixel) * 0.114f);
+                totalBrightness += brightness;
+            }
+        }
+
+        float averageBrightness = totalBrightness / pixelCount;
+        Log.d(TAG, "Average image brightness: " + averageBrightness);
+        return averageBrightness;
+    }
+
+    private float getAdaptiveThreshold(Bitmap image) {
+        float lightingCondition = calculateLightingCondition(image);
+        
+        if (lightingCondition >= GOOD_LIGHTING_THRESHOLD) {
+            Log.d(TAG, "Good lighting detected, using strict threshold");
+            return FACE_MATCH_THRESHOLD_STRICT;
+        } else if (lightingCondition <= POOR_LIGHTING_THRESHOLD) {
+            Log.d(TAG, "Poor lighting detected, using relaxed threshold");
+            return FACE_MATCH_THRESHOLD_RELAXED;
+        } else {
+            // Linear interpolation between thresholds based on lighting
+            float lightingRange = GOOD_LIGHTING_THRESHOLD - POOR_LIGHTING_THRESHOLD;
+            float thresholdRange = FACE_MATCH_THRESHOLD_STRICT - FACE_MATCH_THRESHOLD_RELAXED;
+            float lightingFactor = (lightingCondition - POOR_LIGHTING_THRESHOLD) / lightingRange;
+            float adaptiveThreshold = FACE_MATCH_THRESHOLD_RELAXED + (thresholdRange * lightingFactor);
+            
+            Log.d(TAG, "Moderate lighting detected, using adaptive threshold: " + adaptiveThreshold);
+            return adaptiveThreshold;
         }
     }
 } 

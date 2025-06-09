@@ -42,3 +42,9 @@ out/
 
 # Gradle wrapper
 !gradle/wrapper/gradle-wrapper.jar
+
+# Credentials and sensitive files
+*credentials.json
+*.json.key
+ssattendanceapp-*.json
+app/src/main/assets/credentials.json
