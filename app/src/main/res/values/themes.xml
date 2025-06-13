@@ -35,4 +35,11 @@
         <item name="textAppearanceCaption">@style/TextAppearance.App.Caption</item>
         <item name="textAppearanceOverline">@style/TextAppearance.App.Overline</item>
     </style>
+
+    <style name="Theme.GovernmentApp.NoActionBar" parent="Theme.GovernmentApp">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
 </resources>

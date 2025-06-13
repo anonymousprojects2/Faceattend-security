@@ -39,3 +39,39 @@
 # Prevent proguard from stripping interface information from the classes
 -keep public class * implements com.bumptech.glide.module.GlideModule
 -keep class * extends com.bumptech.glide.module.AppGlideModule { *; }
+
+# Keep security related classes
+-keep class androidx.security.crypto.** { *; }
+-keep class com.example.governmentapp.utils.** { *; }
+
+# Keep Firebase classes
+-keep class com.google.firebase.** { *; }
+-keep class com.google.android.gms.** { *; }
+
+# Keep Face Detection related classes
+-keep class com.google.mlkit.vision.** { *; }
+
+# Keep model classes
+-keep class com.example.governmentapp.models.** { *; }
+
+# Keep encryption related classes
+-keepclassmembers class com.example.governmentapp.utils.SecurityUtil { *; }
+-keepclassmembers class com.example.governmentapp.utils.BiometricUtil { *; }
+-keepclassmembers class com.example.governmentapp.utils.SessionManager { *; }
+
+# Keep annotations
+-keepattributes *Annotation*
+-keepattributes Signature
+-keepattributes Exceptions
+
+# Keep OkHttp classes for SSL pinning
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-keep class okhttp3.** { *; }
+-keep interface okhttp3.** { *; }
+
+# Keep Tink crypto library classes
+-keep class com.google.crypto.tink.** { *; }
+
+# Keep Biometric classes
+-keep class androidx.biometric.** { *; }

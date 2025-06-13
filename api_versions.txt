@@ -1,0 +1,63 @@
+FACEATTEND API Versions
+======================
+
+1. Firebase APIs (Firebase BoM version: 32.7.2)
+---------------------------------------------
+- Firebase Authentication (latest from BoM)
+- Firebase Firestore (latest from BoM)
+- Firebase Analytics (latest from BoM)
+- Firebase Storage (latest from BoM)
+- Google Play Services Auth: 20.7.0
+
+2. Google ML Kit API
+-------------------
+- Face Detection API: 16.1.6
+- Google Play Services Location: 21.1.0
+
+3. Android Framework APIs
+-----------------------
+- compileSdk: 34
+- minSdk: 24
+- targetSdk: 34
+- AppCompat: 1.6.1
+- Material Design: 1.11.0
+- ConstraintLayout: 2.1.4
+- MultiDex: 2.0.1
+
+4. Camera APIs (CameraX)
+-----------------------
+- camera-core: 1.3.1
+- camera-camera2: 1.3.1
+- camera-lifecycle: 1.3.1
+- camera-view: 1.3.1
+
+5. Security APIs
+---------------
+- security-crypto: 1.1.0-alpha06
+- biometric: 1.2.0-alpha05
+- Tink Crypto Library: 1.12.0
+
+6. Networking & SSL
+-----------------
+- OkHttp: 4.12.0
+- OkHttp TLS: 4.12.0
+
+7. Build Tools
+-------------
+- Android Gradle Plugin: 8.2.2
+- Google Services Plugin: 4.4.0
+
+8. Testing Libraries
+------------------
+- JUnit: 4.13.2
+- AndroidX Test JUnit: 1.1.5
+- Espresso Core: 3.5.1
+
+Additional Notes:
+---------------
+- Java Compatibility: Java 8
+- MultiDex: Enabled
+- Release Configuration: Minification and resource shrinking enabled
+- Library Versions: Most libraries use latest stable versions
+- Security Libraries: Some using alpha versions (security-crypto and biometric)
+  Note: Consider updating alpha versions to stable for production use 

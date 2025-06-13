@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">firebase.google.com</domain>
+        <domain includeSubdomains="true">firestore.googleapis.com</domain>
+        <domain includeSubdomains="true">storage.googleapis.com</domain>
+        <pin-set expiration="2025-01-01">
+            <!-- Google's PKP -->
+            <pin digest="SHA-256">7HIpactkIAq2Y49orFOOQKurWxmmSFZhBCoQYcRhJ3Y=</pin>
+            <!-- Backup pin -->
+            <pin digest="SHA-256">YZPgTZ+woNCCCIW3LH2CxQeLzB/1m42QcCTBSdgayjs=</pin>
+        </pin-set>
+    </domain-config>
+</network-security-config> 

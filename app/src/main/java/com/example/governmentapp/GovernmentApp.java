@@ -5,6 +5,8 @@ import android.util.Log;
 
 import androidx.annotation.NonNull;
 
+import com.example.governmentapp.utils.BiometricUtil;
+import com.example.governmentapp.utils.SecurityUtil;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.firebase.FirebaseApp;
@@ -30,9 +32,25 @@ public class GovernmentApp extends Application {
         super.onCreate();
         instance = this;
         
-        // Initialize Firebase
-        if (FirebaseApp.getApps(this).isEmpty()) {
-            try {
+        try {
+            // Initialize security components
+            SecurityUtil.initializeKeyStore();
+            BiometricUtil.initializeBiometricKey(this);
+            
+            // Initialize Firebase
+            initializeFirebase();
+            
+            // Initialize ML Kit Face Detector
+            initializeFaceDetector();
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error during app initialization: " + e.getMessage(), e);
+        }
+    }
+    
+    private void initializeFirebase() {
+        try {
+            if (FirebaseApp.getApps(this).isEmpty()) {
                 FirebaseApp.initializeApp(this);
                 Log.d(TAG, "Firebase initialized successfully");
                 
@@ -42,12 +60,20 @@ public class GovernmentApp extends Application {
                 FirebaseAuth.getInstance();
                 
                 Log.d(TAG, "Firebase Auth, Firestore and Storage initialized");
-            } catch (Exception e) {
-                Log.e(TAG, "Error initializing Firebase: " + e.getMessage(), e);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error initializing Firebase: " + e.getMessage(), e);
+            // Attempt to recover by reinitializing
+            try {
+                FirebaseApp.getInstance().delete();
+                FirebaseApp.initializeApp(this);
+            } catch (Exception ex) {
+                Log.e(TAG, "Failed to recover Firebase initialization: " + ex.getMessage(), ex);
             }
         }
-        
-        // Initialize ML Kit Face Detector with high accuracy mode
+    }
+    
+    private void initializeFaceDetector() {
         try {
             FaceDetectorOptions options = new FaceDetectorOptions.Builder()
                     .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
@@ -62,12 +88,10 @@ public class GovernmentApp extends Application {
         }
     }
     
-    // Get application instance
     public static GovernmentApp getInstance() {
         return instance;
     }
     
-    // Get face detector instance
     public FaceDetector getFaceDetector() {
         return faceDetector;
     }

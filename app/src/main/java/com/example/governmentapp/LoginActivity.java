@@ -10,6 +10,11 @@ import android.widget.Toast;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
+import androidx.biometric.BiometricPrompt;
+
+import com.example.governmentapp.utils.BiometricUtil;
+import com.example.governmentapp.utils.SecurityUtil;
+import com.example.governmentapp.utils.SessionManager;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
@@ -19,6 +24,8 @@ import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
 
 public class LoginActivity extends AppCompatActivity {
+    private static final String TAG = "LoginActivity";
+    
     private TextInputEditText emailEditText;
     private TextInputEditText passwordEditText;
     private TextInputLayout emailLayout;
@@ -31,19 +38,46 @@ public class LoginActivity extends AppCompatActivity {
     private String selectedRole = "USER"; // Default role
     private FirebaseAuth mAuth;
     private FirebaseFirestore db;
+    private SessionManager sessionManager;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         // Force light mode
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO);
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_login);
+        
+        try {
+            setContentView(R.layout.activity_login);
 
-        // Initialize Firebase Auth
-        mAuth = FirebaseAuth.getInstance();
-        db = FirebaseFirestore.getInstance();
+            // Initialize Firebase Auth
+            mAuth = FirebaseAuth.getInstance();
+            db = FirebaseFirestore.getInstance();
+            
+            // Initialize SessionManager
+            sessionManager = new SessionManager(this);
+            
+            // Check if session is valid
+            if (sessionManager.isSessionValid()) {
+                navigateToAttendanceActivity();
+                return;
+            }
 
-        // Initialize views
+            // Initialize views
+            initializeViews();
+            
+            // Set click listeners
+            setupClickListeners();
+            
+            // Set session timeout listener
+            setupSessionTimeoutListener();
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error in onCreate: " + e.getMessage(), e);
+            showErrorAndRetry();
+        }
+    }
+    
+    private void initializeViews() {
         emailEditText = findViewById(R.id.sevarthIdEditText);
         passwordEditText = findViewById(R.id.passwordEditText);
         emailLayout = findViewById(R.id.sevarthIdLayout);
@@ -52,53 +86,75 @@ public class LoginActivity extends AppCompatActivity {
         userButton = findViewById(R.id.userButton);
         adminButton = findViewById(R.id.adminButton);
         forgotPasswordButton = findViewById(R.id.forgotPasswordButton);
-
-        // Set click listeners
+    }
+    
+    private void setupClickListeners() {
         userButton.setOnClickListener(v -> selectRole("USER"));
         adminButton.setOnClickListener(v -> selectRole("ADMIN"));
-        loginButton.setOnClickListener(v -> attemptLogin());
+        loginButton.setOnClickListener(v -> startAuthentication());
         forgotPasswordButton.setOnClickListener(v -> showForgotPasswordDialog());
     }
-
+    
+    private void setupSessionTimeoutListener() {
+        sessionManager.setSessionTimeoutListener(() -> {
+            runOnUiThread(() -> {
+                Toast.makeText(this, "Session expired. Please login again.", Toast.LENGTH_LONG).show();
+                mAuth.signOut();
+            });
+        });
+    }
+    
+    private void showErrorAndRetry() {
+        new AlertDialog.Builder(this)
+            .setTitle("Error")
+            .setMessage("There was an error initializing the app. Would you like to retry?")
+            .setPositiveButton("Retry", (dialog, which) -> {
+                recreate();
+            })
+            .setNegativeButton("Exit", (dialog, which) -> {
+                finish();
+            })
+            .setCancelable(false)
+            .show();
+    }
+    
     @Override
-    public void onStart() {
-        super.onStart();
-        // Check if user is signed in (non-null) and update UI accordingly.
-        FirebaseUser currentUser = mAuth.getCurrentUser();
-        if(currentUser != null) {
-            // Navigate to appropriate screen based on selected role
-            navigateToAttendanceActivity();
+    protected void onDestroy() {
+        super.onDestroy();
+        // Clean up any pending operations
+        if (sessionManager != null) {
+            sessionManager.setSessionTimeoutListener(null);
         }
     }
+    
+    private void startAuthentication() {
+        // Check if biometric is available
+        if (BiometricUtil.isBiometricAvailable(this)) {
+            BiometricUtil.showBiometricPrompt(this, new BiometricUtil.BiometricAuthListener() {
+                @Override
+                public void onBiometricAuthenticationSuccess(BiometricPrompt.AuthenticationResult result) {
+                    // Proceed with login after biometric success
+                    attemptLogin();
+                }
 
-    private void selectRole(String role) {
-        selectedRole = role;
-        if ("USER".equals(role)) {
-            userButton.setBackgroundTintList(getColorStateList(R.color.light_blue));
-            userButton.setTextColor(getColor(R.color.primary));
-            adminButton.setBackgroundTintList(getColorStateList(R.color.white));
-            adminButton.setTextColor(getColor(R.color.gray));
+                @Override
+                public void onBiometricAuthenticationError(int errorCode, String errorMessage) {
+                    Toast.makeText(LoginActivity.this, 
+                        "Biometric authentication failed: " + errorMessage, 
+                        Toast.LENGTH_SHORT).show();
+                }
+
+                @Override
+                public void onBiometricAuthenticationFailed() {
+                    Toast.makeText(LoginActivity.this, 
+                        "Biometric authentication failed", 
+                        Toast.LENGTH_SHORT).show();
+                }
+            });
         } else {
-            adminButton.setBackgroundTintList(getColorStateList(R.color.light_blue));
-            adminButton.setTextColor(getColor(R.color.primary));
-            userButton.setBackgroundTintList(getColorStateList(R.color.white));
-            userButton.setTextColor(getColor(R.color.gray));
+            // If biometric is not available, proceed with password login
+            attemptLogin();
         }
-    }
-
-    private void setLoading(boolean isLoading) {
-        loginButton.setEnabled(!isLoading);
-        loginButton.setText(isLoading ? "Logging in..." : "Login");
-        userButton.setEnabled(!isLoading);
-        adminButton.setEnabled(!isLoading);
-        emailLayout.setEnabled(!isLoading);
-        passwordLayout.setEnabled(!isLoading);
-        forgotPasswordButton.setEnabled(!isLoading);
-    }
-
-    private void clearErrors() {
-        emailLayout.setError(null);
-        passwordLayout.setError(null);
     }
 
     private void attemptLogin() {
@@ -120,7 +176,7 @@ public class LoginActivity extends AppCompatActivity {
         setLoading(true);
 
         // Log the exact sevarthId being queried
-        Log.d("LoginActivity", "Attempting to find user with sevarthId: '" + sevarthId + "'");
+        Log.d(TAG, "Attempting to find user with sevarthId: '" + sevarthId + "'");
 
         // First, look up the email using sevarthId in Firestore
         db.collection("users")
@@ -128,21 +184,16 @@ public class LoginActivity extends AppCompatActivity {
             .get()
             .addOnCompleteListener(task -> {
                 if (task.isSuccessful()) {
-                    Log.d("LoginActivity", "Query successful, found " + 
-                          (task.getResult().isEmpty() ? "0" : task.getResult().size()) + " documents");
-                    
                     if (!task.getResult().isEmpty()) {
                         proceedWithLogin(task.getResult().getDocuments().get(0), password);
                     } else {
-                        // Try a case-insensitive search by loading all users and filtering
-                        Log.d("LoginActivity", "No exact match found, trying case-insensitive search...");
+                        // Try a case-insensitive search
                         performCaseInsensitiveSearch(sevarthId, password);
                     }
                 } else {
-                    // Query failed
                     setLoading(false);
-                    Log.e("LoginActivity", "Query failed", task.getException());
-                    Toast.makeText(LoginActivity.this, "Database error: " + task.getException().getMessage(), 
+                    Toast.makeText(LoginActivity.this, 
+                        "Database error: " + task.getException().getMessage(), 
                         Toast.LENGTH_SHORT).show();
                 }
             });
@@ -197,7 +248,7 @@ public class LoginActivity extends AppCompatActivity {
     
     private void proceedWithLogin(DocumentSnapshot document, String password) {
         String email = document.getString("email");
-        Log.d("LoginActivity", "Found user with email: " + email);
+        Log.d(TAG, "Found user with email: " + email);
 
         // Check if the known admin is trying to login with sevarthId
         boolean isKnownAdmin = "ADMIN".equals(document.getString("role"));
@@ -207,13 +258,11 @@ public class LoginActivity extends AppCompatActivity {
             .addOnCompleteListener(this, authTask -> {
                 setLoading(false);
                 if (authTask.isSuccessful()) {
-                    // Sign in success
                     FirebaseUser user = mAuth.getCurrentUser();
                     
                     // If user selected admin role and is a known admin, allow direct access
                     if ("ADMIN".equals(selectedRole) && isKnownAdmin) {
-                        Toast.makeText(LoginActivity.this, "Admin login successful", Toast.LENGTH_SHORT).show();
-                        navigateToAttendanceActivity();
+                        onLoginSuccess(user, "ADMIN");
                         return;
                     }
                     
@@ -228,15 +277,51 @@ public class LoginActivity extends AppCompatActivity {
                         return;
                     }
                     
-                    Toast.makeText(LoginActivity.this, "Login successful", Toast.LENGTH_SHORT).show();
-                    navigateToAttendanceActivity();
+                    onLoginSuccess(user, userRole);
                 } else {
-                    // If sign in fails, display a message to the user
-                    Log.e("LoginActivity", "Authentication failed", authTask.getException());
-                    Toast.makeText(LoginActivity.this, "Authentication failed. Invalid password.", 
+                    Toast.makeText(LoginActivity.this, 
+                        "Authentication failed: " + authTask.getException().getMessage(),
                         Toast.LENGTH_SHORT).show();
                 }
             });
+    }
+    
+    private void onLoginSuccess(FirebaseUser user, String role) {
+        // Start session with user ID and role
+        sessionManager.startSession(user.getUid(), role);
+        
+        Toast.makeText(LoginActivity.this, "Login successful", Toast.LENGTH_SHORT).show();
+        navigateToAttendanceActivity();
+    }
+
+    private void selectRole(String role) {
+        selectedRole = role;
+        if ("USER".equals(role)) {
+            userButton.setBackgroundTintList(getColorStateList(R.color.light_blue));
+            userButton.setTextColor(getColor(R.color.primary));
+            adminButton.setBackgroundTintList(getColorStateList(R.color.white));
+            adminButton.setTextColor(getColor(R.color.gray));
+        } else {
+            adminButton.setBackgroundTintList(getColorStateList(R.color.light_blue));
+            adminButton.setTextColor(getColor(R.color.primary));
+            userButton.setBackgroundTintList(getColorStateList(R.color.white));
+            userButton.setTextColor(getColor(R.color.gray));
+        }
+    }
+
+    private void setLoading(boolean isLoading) {
+        loginButton.setEnabled(!isLoading);
+        loginButton.setText(isLoading ? "Logging in..." : "Login");
+        userButton.setEnabled(!isLoading);
+        adminButton.setEnabled(!isLoading);
+        emailLayout.setEnabled(!isLoading);
+        passwordLayout.setEnabled(!isLoading);
+        forgotPasswordButton.setEnabled(!isLoading);
+    }
+
+    private void clearErrors() {
+        emailLayout.setError(null);
+        passwordLayout.setError(null);
     }
 
     private void navigateToAttendanceActivity() {
